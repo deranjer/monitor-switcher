@@ -28,11 +28,11 @@ pub fn build(parent: &(impl GuiParent + 'static)) -> MonitorsPanel {
 
     let detect_btn = gui::Button::new(
         &panel,
-        gui::ButtonOpts { position: (10, 10), text: "Detect / Refresh".to_owned(), ..Default::default() },
+        gui::ButtonOpts { position: (10, 10), text: "Detect / Refresh".to_owned(), width: 140, ..Default::default() },
     );
     let identify_btn = gui::Button::new(
         &panel,
-        gui::ButtonOpts { position: (160, 10), text: "Identify Monitors".to_owned(), ..Default::default() },
+        gui::ButtonOpts { position: (160, 10), text: "Identify Monitors".to_owned(), width: 140, ..Default::default() },
     );
 
     let list = gui::ListBox::new(
