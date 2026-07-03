@@ -118,3 +118,73 @@ impl Default for Config {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn monitor_key_from_parts_format() {
+        assert_eq!(MonitorKey::from_parts(1, "Generic PnP Monitor").0, "1:Generic PnP Monitor");
+    }
+
+    #[test]
+    fn input_source_value_vcp_code_and_display() {
+        let named = InputSourceValue::Named("HDMI-2".to_owned(), 0x11);
+        assert_eq!(named.vcp_code(), 0x11);
+        assert_eq!(named.display(), "HDMI-2 (0x11)");
+
+        let raw = InputSourceValue::RawVcp(0x0F);
+        assert_eq!(raw.vcp_code(), 0x0F);
+        assert_eq!(raw.display(), "0x0F (manual)");
+    }
+
+    #[test]
+    fn verify_enabled_defaults_true_unless_overridden() {
+        let mut cfg = Config::default();
+        let key = MonitorKey::from_parts(0, "Dark Matter");
+        assert!(cfg.verify_enabled(&key));
+
+        cfg.monitor_verify.insert(key.clone(), false);
+        assert!(!cfg.verify_enabled(&key));
+    }
+
+    #[test]
+    fn config_roundtrips_through_json() {
+        let mut cfg = Config::default();
+        let key = MonitorKey::from_parts(0, "Generic PnP Monitor");
+        let mut profile = Profile::new("Main PC");
+        profile.hotkey = Some(HotkeyBinding {
+            modifiers: vec![ModifierKey::Control, ModifierKey::Alt],
+            code: "Digit1".to_owned(),
+            display: "Ctrl+Alt+1".to_owned(),
+        });
+        profile.assignments.insert(key.clone(), InputSourceValue::Named("DP-1".to_owned(), 0x0F));
+        cfg.profiles.push(profile);
+        cfg.monitor_verify.insert(key, false);
+
+        let json = serde_json::to_string(&cfg).unwrap();
+        let restored: Config = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.profiles.len(), 1);
+        assert_eq!(restored.profiles[0].name, "Main PC");
+        assert_eq!(restored.profiles[0].hotkey.as_ref().unwrap().display, "Ctrl+Alt+1");
+        assert_eq!(restored.monitor_verify.len(), 1);
+    }
+
+    #[test]
+    fn config_without_monitor_verify_field_still_deserializes() {
+        // Simulates a config.json saved before `monitor_verify` existed -
+        // `#[serde(default)]` must keep old files loading instead of tripping
+        // the "failed to parse, back up and reset" path in `config::load`.
+        let json = r#"{
+            "version": 1,
+            "profiles": [],
+            "monitor_labels": {},
+            "launch_minimized": true,
+            "autostart_enabled": false
+        }"#;
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        assert!(cfg.monitor_verify.is_empty());
+    }
+}

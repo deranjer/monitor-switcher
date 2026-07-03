@@ -86,3 +86,40 @@ fn to_hotkey(binding: &HotkeyBinding) -> Option<HotKey> {
     }
     Some(HotKey::new(Some(mods), code))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn binding(modifiers: Vec<ModifierKey>, code: &str) -> HotkeyBinding {
+        HotkeyBinding { modifiers, code: code.to_owned(), display: String::new() }
+    }
+
+    #[test]
+    fn to_hotkey_combines_modifiers_and_code() {
+        let hk = to_hotkey(&binding(vec![ModifierKey::Control, ModifierKey::Alt], "Digit1")).unwrap();
+        assert_eq!(hk.key, Code::Digit1);
+        assert!(hk.mods.contains(Modifiers::CONTROL));
+        assert!(hk.mods.contains(Modifiers::ALT));
+        assert!(!hk.mods.contains(Modifiers::SHIFT));
+    }
+
+    #[test]
+    fn to_hotkey_with_no_modifiers() {
+        let hk = to_hotkey(&binding(vec![], "F1")).unwrap();
+        assert_eq!(hk.key, Code::F1);
+        assert_eq!(hk.mods, Modifiers::empty());
+    }
+
+    #[test]
+    fn to_hotkey_rejects_unknown_code() {
+        assert!(to_hotkey(&binding(vec![], "NotARealCode")).is_none());
+    }
+
+    #[test]
+    fn same_binding_produces_same_hotkey_id() {
+        let a = to_hotkey(&binding(vec![ModifierKey::Shift], "KeyA")).unwrap();
+        let b = to_hotkey(&binding(vec![ModifierKey::Shift], "KeyA")).unwrap();
+        assert_eq!(a.id(), b.id());
+    }
+}

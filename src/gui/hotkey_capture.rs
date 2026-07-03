@@ -80,3 +80,24 @@ pub fn poll() -> Option<HotkeyBinding> {
 pub fn is_cancel(binding: &HotkeyBinding) -> bool {
     binding.code.is_empty()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_code_is_cancel() {
+        let binding = HotkeyBinding { modifiers: Vec::new(), code: String::new(), display: String::new() };
+        assert!(is_cancel(&binding));
+    }
+
+    #[test]
+    fn non_empty_code_is_not_cancel() {
+        let binding = HotkeyBinding {
+            modifiers: vec![ModifierKey::Control],
+            code: "Digit1".to_owned(),
+            display: "Ctrl+1".to_owned(),
+        };
+        assert!(!is_cancel(&binding));
+    }
+}

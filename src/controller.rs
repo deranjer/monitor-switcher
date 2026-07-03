@@ -181,3 +181,70 @@ fn chrono_like_timestamp() -> String {
         .unwrap_or_default();
     format!("{}", now.as_secs())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    // `Controller::new` only constructs a `WindowsDdcBackend` (a zero-cost
+    // unit struct - see `platform::windows::ddc::WindowsDdcBackend::new`), so
+    // it's safe to build in tests without touching real monitor hardware.
+    // These tests must never call `apply_profile`: that spawns a thread that
+    // does real DDC/CI I/O via `backend.enumerate()`.
+
+    #[test]
+    fn add_profile_appears_in_snapshot() {
+        let controller = Controller::new(Config::default());
+        let id = controller.add_profile("Main PC");
+        let snapshot = controller.profiles_snapshot();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].id, id);
+        assert_eq!(snapshot[0].name, "Main PC");
+    }
+
+    #[test]
+    fn delete_profile_removes_only_that_one() {
+        let controller = Controller::new(Config::default());
+        let keep = controller.add_profile("Keep");
+        let remove = controller.add_profile("Remove");
+
+        controller.delete_profile(remove);
+
+        let snapshot = controller.profiles_snapshot();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].id, keep);
+    }
+
+    #[test]
+    fn with_config_mut_mutates_shared_config() {
+        let controller = Controller::new(Config::default());
+        controller.with_config_mut(|cfg| cfg.launch_minimized = false);
+        assert!(!controller.config.lock().unwrap().launch_minimized);
+    }
+
+    #[test]
+    fn log_snapshot_preserves_order() {
+        let controller = Controller::new(Config::default());
+        controller.push_log("first");
+        controller.push_log("second");
+
+        let log = controller.log_snapshot();
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].message, "first");
+        assert_eq!(log[1].message, "second");
+    }
+
+    #[test]
+    fn log_caps_at_max_entries_and_drops_oldest() {
+        let controller = Controller::new(Config::default());
+        for i in 0..MAX_LOG_ENTRIES + 1 {
+            controller.push_log(format!("entry {i}"));
+        }
+
+        let log = controller.log_snapshot();
+        assert_eq!(log.len(), MAX_LOG_ENTRIES);
+        assert_eq!(log[0].message, "entry 1");
+        assert_eq!(log.last().unwrap().message, format!("entry {MAX_LOG_ENTRIES}"));
+    }
+}
