@@ -2,6 +2,7 @@
 name = "monitor-switcher"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 ddc-hi = { version = "=0.4.1", default-features = false, features = ["ddc-winapi"] }
