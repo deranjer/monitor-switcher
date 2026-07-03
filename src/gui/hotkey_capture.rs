@@ -1,135 +1,82 @@
+//! "Press a key combo" capture, implemented by polling `GetAsyncKeyState` on a
+//! short timer while capture mode is active - the same technique
+//! `global-hotkey`'s own Windows backend uses internally to detect key
+//! release (see its `platform_impl/windows/mod.rs`). Deliberately not a
+//! global low-level keyboard hook (`WH_KEYBOARD_LL`): a hook needs careful
+//! install/uninstall lifetime management and runs system-wide, whereas this
+//! only ever runs for a few seconds while the visible settings window has
+//! focus, so simple polling is both simpler and lower-risk.
+
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_ESCAPE, VK_MENU, VK_SHIFT};
+
 use crate::config::{HotkeyBinding, ModifierKey};
 
-#[derive(Default)]
-pub struct CaptureState {
-    pub capturing: bool,
+/// Virtual-key codes we recognize as the "final" (non-modifier) key of a
+/// combo, paired with the `global_hotkey::hotkey::Code` string name and a
+/// display label.
+const CANDIDATES: &[(u16, &str, &str)] = &[
+    (0x41, "KeyA", "A"), (0x42, "KeyB", "B"), (0x43, "KeyC", "C"), (0x44, "KeyD", "D"),
+    (0x45, "KeyE", "E"), (0x46, "KeyF", "F"), (0x47, "KeyG", "G"), (0x48, "KeyH", "H"),
+    (0x49, "KeyI", "I"), (0x4A, "KeyJ", "J"), (0x4B, "KeyK", "K"), (0x4C, "KeyL", "L"),
+    (0x4D, "KeyM", "M"), (0x4E, "KeyN", "N"), (0x4F, "KeyO", "O"), (0x50, "KeyP", "P"),
+    (0x51, "KeyQ", "Q"), (0x52, "KeyR", "R"), (0x53, "KeyS", "S"), (0x54, "KeyT", "T"),
+    (0x55, "KeyU", "U"), (0x56, "KeyV", "V"), (0x57, "KeyW", "W"), (0x58, "KeyX", "X"),
+    (0x59, "KeyY", "Y"), (0x5A, "KeyZ", "Z"),
+    (0x30, "Digit0", "0"), (0x31, "Digit1", "1"), (0x32, "Digit2", "2"), (0x33, "Digit3", "3"),
+    (0x34, "Digit4", "4"), (0x35, "Digit5", "5"), (0x36, "Digit6", "6"), (0x37, "Digit7", "7"),
+    (0x38, "Digit8", "8"), (0x39, "Digit9", "9"),
+    (0x70, "F1", "F1"), (0x71, "F2", "F2"), (0x72, "F3", "F3"), (0x73, "F4", "F4"),
+    (0x74, "F5", "F5"), (0x75, "F6", "F6"), (0x76, "F7", "F7"), (0x77, "F8", "F8"),
+    (0x78, "F9", "F9"), (0x79, "F10", "F10"), (0x7A, "F11", "F11"), (0x7B, "F12", "F12"),
+];
+
+fn is_down(vk: i32) -> bool {
+    (unsafe { GetAsyncKeyState(vk) } as u16 & 0x8000) != 0
 }
 
-/// Renders the "click to set hotkey" button. While capturing, reads egui's own
-/// input events directly (the window is guaranteed focused during capture)
-/// rather than going through `global-hotkey` - that lets a conflict with
-/// another app's registration surface only once the user commits, via
-/// `HotkeyRegistry::sync`'s `register()` error path, instead of failing silently
-/// mid-capture.
-///
-/// Returns `Some(binding)` the moment a non-modifier key is pressed while
-/// capturing (commits immediately - simpler than a press/hold/release flow).
-pub fn show(ui: &mut egui::Ui, state: &mut CaptureState, current: &Option<HotkeyBinding>) -> Option<HotkeyBinding> {
-    let label = if state.capturing {
-        "Press a key combo...".to_string()
-    } else {
-        current.as_ref().map(|b| b.display.clone()).unwrap_or_else(|| "(none)".to_string())
-    };
-
-    if ui.button(label).clicked() {
-        state.capturing = true;
+/// Call on every capture-mode timer tick. Returns `Some(binding)` the moment
+/// a non-modifier candidate key is currently down, alongside whatever
+/// modifiers (Ctrl/Alt/Shift) are held at that instant. Arrow keys, Escape,
+/// Space, and Enter are treated as cancel/plain keys here since they're more
+/// useful left alone for normal navigation - only the candidates above (and
+/// their listed modifiers) can be captured.
+pub fn poll() -> Option<HotkeyBinding> {
+    // Escape cancels the capture entirely rather than being bindable itself -
+    // matches the convention of every other "press a shortcut" UI.
+    if is_down(VK_ESCAPE.0 as i32) {
+        return Some(HotkeyBinding {
+            modifiers: Vec::new(),
+            code: String::new(),
+            display: String::new(),
+        });
     }
 
-    if !state.capturing {
-        return None;
-    }
-
-    let mut result = None;
-    ui.ctx().input(|input| {
-        let modifiers = input.modifiers;
-        for event in &input.events {
-            if let egui::Event::Key { key, pressed: true, repeat: false, .. } = event {
-                if let Some(code) = egui_key_to_global_hotkey_code(*key) {
-                    let mut mods = Vec::new();
-                    if modifiers.ctrl {
-                        mods.push(ModifierKey::Control);
-                    }
-                    if modifiers.alt {
-                        mods.push(ModifierKey::Alt);
-                    }
-                    if modifiers.shift {
-                        mods.push(ModifierKey::Shift);
-                    }
-                    let display = format!(
-                        "{}{}{}{:?}",
-                        if modifiers.ctrl { "Ctrl+" } else { "" },
-                        if modifiers.alt { "Alt+" } else { "" },
-                        if modifiers.shift { "Shift+" } else { "" },
-                        key
-                    );
-
-                    result = Some(HotkeyBinding {
-                        modifiers: mods,
-                        code: code.to_string(),
-                        display,
-                    });
-                }
+    for &(vk, code, label) in CANDIDATES {
+        if is_down(vk as i32) {
+            let mut modifiers = Vec::new();
+            let mut display = String::new();
+            if is_down(VK_CONTROL.0 as i32) {
+                modifiers.push(ModifierKey::Control);
+                display.push_str("Ctrl+");
             }
+            if is_down(VK_MENU.0 as i32) {
+                modifiers.push(ModifierKey::Alt);
+                display.push_str("Alt+");
+            }
+            if is_down(VK_SHIFT.0 as i32) {
+                modifiers.push(ModifierKey::Shift);
+                display.push_str("Shift+");
+            }
+            display.push_str(label);
+            return Some(HotkeyBinding { modifiers, code: code.to_string(), display });
         }
-    });
-
-    if result.is_some() {
-        state.capturing = false;
     }
 
-    result
+    None
 }
 
-fn egui_key_to_global_hotkey_code(key: egui::Key) -> Option<global_hotkey::hotkey::Code> {
-    use egui::Key as K;
-    use global_hotkey::hotkey::Code as C;
-
-    Some(match key {
-        K::A => C::KeyA,
-        K::B => C::KeyB,
-        K::C => C::KeyC,
-        K::D => C::KeyD,
-        K::E => C::KeyE,
-        K::F => C::KeyF,
-        K::G => C::KeyG,
-        K::H => C::KeyH,
-        K::I => C::KeyI,
-        K::J => C::KeyJ,
-        K::K => C::KeyK,
-        K::L => C::KeyL,
-        K::M => C::KeyM,
-        K::N => C::KeyN,
-        K::O => C::KeyO,
-        K::P => C::KeyP,
-        K::Q => C::KeyQ,
-        K::R => C::KeyR,
-        K::S => C::KeyS,
-        K::T => C::KeyT,
-        K::U => C::KeyU,
-        K::V => C::KeyV,
-        K::W => C::KeyW,
-        K::X => C::KeyX,
-        K::Y => C::KeyY,
-        K::Z => C::KeyZ,
-        K::Num0 => C::Digit0,
-        K::Num1 => C::Digit1,
-        K::Num2 => C::Digit2,
-        K::Num3 => C::Digit3,
-        K::Num4 => C::Digit4,
-        K::Num5 => C::Digit5,
-        K::Num6 => C::Digit6,
-        K::Num7 => C::Digit7,
-        K::Num8 => C::Digit8,
-        K::Num9 => C::Digit9,
-        K::F1 => C::F1,
-        K::F2 => C::F2,
-        K::F3 => C::F3,
-        K::F4 => C::F4,
-        K::F5 => C::F5,
-        K::F6 => C::F6,
-        K::F7 => C::F7,
-        K::F8 => C::F8,
-        K::F9 => C::F9,
-        K::F10 => C::F10,
-        K::F11 => C::F11,
-        K::F12 => C::F12,
-        K::ArrowUp => C::ArrowUp,
-        K::ArrowDown => C::ArrowDown,
-        K::ArrowLeft => C::ArrowLeft,
-        K::ArrowRight => C::ArrowRight,
-        K::Escape => C::Escape,
-        K::Space => C::Space,
-        K::Enter => C::Enter,
-        _ => return None,
-    })
+/// A cancel sentinel: `poll()` returns this exact (empty) binding when Escape
+/// was pressed, since capture should stop without committing a new binding.
+pub fn is_cancel(binding: &HotkeyBinding) -> bool {
+    binding.code.is_empty()
 }

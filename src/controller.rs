@@ -1,7 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use crossbeam_channel::{Receiver, Sender};
 use uuid::Uuid;
 
 use crate::config::{self, Config, MonitorKey, Profile};
@@ -17,43 +16,35 @@ pub struct LogEntry {
     pub message: String,
 }
 
-/// Signals that new entries were pushed to the log - drained by `App::ui()` to
-/// refresh its cached copy of the log panel contents. The message itself
-/// always comes from `Controller::log_snapshot()`, never the event payload, so
-/// this carries no data of its own.
-pub struct AppEvent;
-
 /// The single place all three trigger paths (hotkey fired, tray menu clicked,
-/// GUI "Apply" button) funnel through, so profile-apply logic never gets
-/// duplicated three times.
+/// GUI edits) funnel through, so profile-apply logic never gets duplicated.
+/// The log is pull-based (`log_snapshot`, read whenever the Log tab is shown
+/// or refreshed) rather than push-notified - there's no per-frame loop in the
+/// native GUI to drain a notification channel, so there's nothing for a push
+/// channel to buy here.
 /// Owns only `Send + Sync` state - notably *not* the platform hotkey manager,
 /// since Windows' `GlobalHotKeyManager` wraps a raw `HWND` and is `!Send`
 /// (registering/unregistering a hotkey is only valid from the thread that
 /// created its message-only window anyway). `Controller` gets moved into
 /// disposable worker threads for profile-apply, so it must stay free of any
-/// thread-affine handles; the hotkey manager itself lives in `app.rs` on the
-/// main thread instead, with just a tiny `Send`-safe id->profile lookup map
-/// shared into the hotkey-fired callback.
+/// thread-affine handles; the hotkey manager itself lives on the main thread
+/// instead (see `gui::Shared`), with just a tiny `Send`-safe id->profile
+/// lookup map shared into the hotkey-fired callback.
 pub struct Controller {
     pub config: Mutex<Config>,
     log: Mutex<VecDeque<LogEntry>>,
     in_flight: Mutex<HashSet<Uuid>>,
-    event_tx: Sender<AppEvent>,
     backend: Arc<WindowsDdcBackend>,
 }
 
 impl Controller {
-    pub fn new(config: Config) -> (Arc<Self>, Receiver<AppEvent>) {
-        let (tx, rx) = crossbeam_channel::unbounded();
-
-        let controller = Arc::new(Controller {
+    pub fn new(config: Config) -> Arc<Self> {
+        Arc::new(Controller {
             config: Mutex::new(config),
             log: Mutex::new(VecDeque::with_capacity(MAX_LOG_ENTRIES)),
             in_flight: Mutex::new(HashSet::new()),
-            event_tx: tx,
             backend: Arc::new(WindowsDdcBackend::new()),
-        });
-        (controller, rx)
+        })
     }
 
     pub fn push_log(&self, message: impl Into<String>) {
@@ -67,7 +58,6 @@ impl Controller {
             log.pop_front();
         }
         log.push_back(entry);
-        let _ = self.event_tx.send(AppEvent);
     }
 
     pub fn log_snapshot(&self) -> Vec<LogEntry> {

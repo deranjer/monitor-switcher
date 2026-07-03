@@ -51,11 +51,10 @@ impl HotkeyRegistry {
             .map(|(id, _)| *id)
             .collect();
         for id in stale {
-            if let Some(hk) = self.registered.remove(&id) {
-                if let Err(e) = self.manager.unregister(hk) {
+            if let Some(hk) = self.registered.remove(&id)
+                && let Err(e) = self.manager.unregister(hk) {
                     tracing::warn!("failed to unregister hotkey for profile {id}: {e}");
                 }
-            }
         }
 
         // Register anything new or changed.

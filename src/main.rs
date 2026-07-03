@@ -1,6 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod app;
 mod config;
 mod controller;
 mod gui;
@@ -8,10 +7,24 @@ mod hotkeys;
 mod platform;
 mod tray;
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use platform::windows::WindowsDdcBackend;
 use platform::DdcBackend;
 
 fn main() -> anyhow::Result<()> {
+    // Must happen before any window is created (winsafe's `gui::dpi()` only
+    // scales layout numbers - it does not declare DPI awareness to Windows).
+    // Without this, the process defaults to DPI-unaware and DWM
+    // bitmap-stretches the whole window on any monitor above 100% scaling,
+    // turning the native controls blurry.
+    unsafe {
+        let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
+            windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        );
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
@@ -26,11 +39,11 @@ fn main() -> anyhow::Result<()> {
         return debug_monitors();
     }
     if args.iter().any(|a| a == "--debug-monitors-sta") {
-        // Simulates the GUI's main-thread COM state (eframe/winit initializes
-        // COM apartment-threaded for OLE drag-and-drop/shell integration)
-        // before calling enumerate() - a regression test for the bug where
-        // WMI hardware-info lookup silently returned nothing inside the
-        // actual GUI despite working fine from this CLI's fresh thread.
+        // Simulates the GUI's main-thread COM state (winsafe/native controls
+        // may initialize COM apartment-threaded for OLE drag-and-drop/shell
+        // integration) before calling enumerate() - a regression test for the
+        // bug where WMI hardware-info lookup silently returned nothing inside
+        // the actual GUI despite working fine from this CLI's fresh thread.
         unsafe {
             let _ = windows::Win32::System::Com::CoInitializeEx(
                 None,
@@ -51,24 +64,38 @@ fn main() -> anyhow::Result<()> {
         return debug_set_input(index, &hex);
     }
 
+    // Claim single-instance ownership before creating anything (tray icon,
+    // hotkey manager, window) - a second launch just exits quietly here
+    // rather than spawning a duplicate tray icon and colliding with the
+    // first instance's hotkey registrations and config.json writes. This
+    // must stay alive for the rest of `main`, since dropping it releases the
+    // mutex and would let a third instance start.
+    let Some(_single_instance_guard) = platform::windows::single_instance::acquire() else {
+        tracing::info!("another instance is already running; exiting");
+        return Ok(());
+    };
+
     let launch_tray_only = args.iter().any(|a| a == "--tray");
 
     let cfg = config::load()?;
     let start_visible = !launch_tray_only && !cfg.launch_minimized;
 
-    let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([720.0, 560.0])
-            .with_visible(start_visible),
-        ..Default::default()
-    };
+    let controller = controller::Controller::new(cfg);
 
-    eframe::run_native(
-        "Monitor Switcher",
-        native_options,
-        Box::new(move |cc| Ok(Box::new(app::MonitorSwitcherApp::new(cc, cfg)))),
-    )
-    .map_err(|e| anyhow::anyhow!("eframe error: {e}"))
+    let mut hotkeys = hotkeys::HotkeyRegistry::new()?;
+    hotkeys.sync(&controller.profiles_snapshot());
+    let hotkey_lookup: Arc<Mutex<HashMap<u32, uuid::Uuid>>> = Arc::new(Mutex::new(hotkeys.lookup_snapshot()));
+
+    let app_tray = tray::build_tray(&controller.profiles_snapshot())?;
+
+    let main_window = gui::MainWindow::new(controller, hotkeys, hotkey_lookup, app_tray, start_visible);
+
+    main_window
+        .wnd
+        .run_main(Some(if start_visible { winsafe::co::SW::SHOW } else { winsafe::co::SW::HIDE }))
+        .map_err(|e| anyhow::anyhow!("window run_main error: {e}"))?;
+
+    Ok(())
 }
 
 fn debug_monitors() -> anyhow::Result<()> {

@@ -61,13 +61,8 @@ fn build_menu(profiles: &[Profile]) -> (Menu, HashMap<MenuId, Uuid>) {
 }
 
 fn load_icon() -> Icon {
-    // A minimal embedded 16x16 solid-color RGBA icon - avoids a runtime PNG
-    // decode dependency; swap for a real asset via include_bytes! + image
-    // decode later if a nicer icon is wanted.
-    const SIZE: u32 = 16;
-    let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
-    for _ in 0..(SIZE * SIZE) {
-        rgba.extend_from_slice(&[0x2b, 0x6c, 0xb0, 0xff]);
-    }
-    Icon::from_rgba(rgba, SIZE, SIZE).expect("valid icon dimensions")
+    // Pre-rendered RGBA (no PNG decode dependency needed) - see assets/gen_icons.py.
+    const SIZE: u32 = 32;
+    const RGBA: &[u8] = include_bytes!("../assets/tray_icon_32.rgba");
+    Icon::from_rgba(RGBA.to_vec(), SIZE, SIZE).expect("valid icon dimensions")
 }
