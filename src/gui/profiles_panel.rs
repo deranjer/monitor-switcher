@@ -302,9 +302,40 @@ impl MainWindow {
         self.persist_profiles_change();
     }
 
+    /// Actually flips the assignment between `Named`/`RawVcp` in response to
+    /// the checkbox click - previously this just called
+    /// `refresh_profile_monitor_rows()` without changing any underlying
+    /// state, so the freshly re-derived `manual_mode` (computed purely from
+    /// whether the saved assignment is a `RawVcp`) immediately snapped the
+    /// checkbox back to its old value, making every click look like a
+    /// flicker that didn't stick.
     fn toggle_row_manual(self: &Rc<Self>, row_index: usize) {
+        let Some(profile_id) = self.selected_profile.get() else { return };
+        let key = {
+            let monitors = self.shared.monitors.borrow();
+            let Some(m) = monitors.get(row_index) else { return };
+            m.key.clone()
+        };
+        let manual_now = self.prof_rows[row_index].manual_chk.is_checked();
+
+        self.shared.controller.with_config_mut(|cfg| {
+            let Some(p) = cfg.profiles.iter_mut().find(|p| p.id == profile_id) else { return };
+            let current = p.assignments.get(&key).cloned();
+            match (manual_now, current) {
+                (true, Some(InputSourceValue::Named(_, code))) => {
+                    p.assignments.insert(key.clone(), InputSourceValue::RawVcp(code));
+                }
+                (true, None) => {
+                    p.assignments.insert(key.clone(), InputSourceValue::RawVcp(0));
+                }
+                (false, Some(InputSourceValue::RawVcp(_))) => {
+                    p.assignments.remove(&key);
+                }
+                _ => {}
+            }
+        });
+        self.persist_profiles_change();
         self.refresh_profile_monitor_rows();
-        let _ = row_index;
     }
 
     fn commit_row_hex(self: &Rc<Self>, row_index: usize) {

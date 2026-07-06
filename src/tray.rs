@@ -1,8 +1,5 @@
-use std::collections::HashMap;
-
-use tray_icon::menu::{Menu, MenuId, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
-use uuid::Uuid;
 
 use crate::config::Profile;
 
@@ -11,12 +8,10 @@ pub const QUIT_ID: &str = "quit";
 
 pub struct AppTray {
     pub tray_icon: TrayIcon,
-    /// Menu item id -> profile id, for the quick-switch entries.
-    pub profile_menu_ids: HashMap<MenuId, Uuid>,
 }
 
 pub fn build_tray(profiles: &[Profile]) -> anyhow::Result<AppTray> {
-    let (menu, profile_menu_ids) = build_menu(profiles);
+    let menu = build_menu(profiles);
     let icon = load_icon();
 
     let tray_icon = TrayIconBuilder::new()
@@ -25,31 +20,30 @@ pub fn build_tray(profiles: &[Profile]) -> anyhow::Result<AppTray> {
         .with_icon(icon)
         .build()?;
 
-    Ok(AppTray {
-        tray_icon,
-        profile_menu_ids,
-    })
+    Ok(AppTray { tray_icon })
 }
 
 /// Rebuilds and swaps the tray context menu - call after profiles are added,
 /// renamed, or removed so the quick-switch entries stay in sync.
 pub fn rebuild_menu(tray: &mut AppTray, profiles: &[Profile]) {
-    let (menu, profile_menu_ids) = build_menu(profiles);
+    let menu = build_menu(profiles);
     tray.tray_icon.set_menu(Some(Box::new(menu)));
-    tray.profile_menu_ids = profile_menu_ids;
 }
 
-fn build_menu(profiles: &[Profile]) -> (Menu, HashMap<MenuId, Uuid>) {
+fn build_menu(profiles: &[Profile]) -> Menu {
     let menu = Menu::new();
-    let mut profile_menu_ids = HashMap::new();
 
     let open_settings = MenuItem::with_id(OPEN_SETTINGS_ID, "Open Settings", true, None);
     let _ = menu.append(&open_settings);
     let _ = menu.append(&PredefinedMenuItem::separator());
 
     for profile in profiles {
-        let item = MenuItem::new(&profile.name, true, None);
-        profile_menu_ids.insert(item.id().clone(), profile.id);
+        // Must use `with_id` (the profile's own UUID) rather than `new` -
+        // `MenuItem::new` lets muda auto-assign an internal counter-based id
+        // (e.g. "1000", "1001", ...), which the `MenuEvent` handler in
+        // `gui/mod.rs` can never parse back into a profile `Uuid`, so the
+        // quick-switch entry would silently do nothing when clicked.
+        let item = MenuItem::with_id(profile.id.to_string(), &profile.name, true, None);
         let _ = menu.append(&item);
     }
 
@@ -57,7 +51,7 @@ fn build_menu(profiles: &[Profile]) -> (Menu, HashMap<MenuId, Uuid>) {
     let quit = MenuItem::with_id(QUIT_ID, "Quit", true, None);
     let _ = menu.append(&quit);
 
-    (menu, profile_menu_ids)
+    menu
 }
 
 fn load_icon() -> Icon {
