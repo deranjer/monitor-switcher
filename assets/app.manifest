@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Declares the Common Controls v6 dependency. Without this, the process gets
+  legacy ComCtl32 5.x behavior, where a combo box's dropdown-list height is
+  whatever height the control was *created* with - and winsafe creates all
+  ComboBoxes with height 0 (see winsafe's ComboBox::new: `SIZE::new(opts.width, 0)`),
+  so every dropdown opened as an empty zero-row list. With v6, the system
+  sizes the dropdown itself (30 visible items by default) and the creation
+  height is ignored, which is the behavior winsafe assumes.
+
+  DPI awareness is intentionally NOT declared here - main.rs sets
+  PER_MONITOR_AWARE_V2 programmatically before any window is created.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>
